@@ -15,7 +15,6 @@ public class ProtocolHelper {
     public static final int UDP_HEADER_LENGTH = 8;
     public static final int COMMAND_HEADER_LENGTH = 24;
 
-
     public static final int SET_EXTRA_LENGTH = 8;
     public static final int INC_EXTRA_LENGTH = 20;
 

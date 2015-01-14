@@ -5,10 +5,11 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.net.InetSocketAddress;
-import java.util.Collections;
 import java.util.Random;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by tesseract on 29.12.14.
@@ -17,59 +18,6 @@ public class UdpClientTest {
 
     public static final int DEFAULT_EXP = 60;
     private Client client;
-
-    @Before
-    public void setUp() {
-        client = new ClientBuilder()
-                .setTimeout(500000)
-                .retryTimeout(250000)
-                .addMirror(Collections.singletonList(new InetSocketAddress("localhost", 11211)))
-                .build();
-    }
-
-    @Test
-    public void setQ() throws Exception {
-        // настройка системы
-        String key = randomString();
-        String value = randomString();
-
-        // вызов системы
-        client.setQ(key, DEFAULT_EXP, value);
-
-        // проверка утверждений
-        Thread.sleep(10);
-        String result = client.get(key).get(1, TimeUnit.SECONDS);
-        Assert.assertEquals(value, result);
-    }
-
-    @Test
-    public void setAndGet() throws Exception {
-        // настройка системы
-        String key = randomString();
-        String value = randomString();
-
-        client.set(key, DEFAULT_EXP, value).get(2, TimeUnit.SECONDS);
-
-        // вызов системы
-        String result = client.get(key).get(2, TimeUnit.SECONDS);
-
-        // проверка результатов
-        Assert.assertEquals(value, result);
-    }
-
-    @Test
-    public void inc() throws Exception {
-        // настройка системы
-        String key = randomString();
-        int initialValue = randomInt();
-        int amount = randomInt();
-
-        // вызов системы
-        long result = client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
-
-        // проверка утверждений
-        Assert.assertEquals(initialValue, result);
-    }
 
     @Test
     public void dec() throws Exception {
@@ -86,21 +34,6 @@ public class UdpClientTest {
     }
 
     @Test
-    public void incExists() throws Exception {
-        // настройка системы
-        String key = randomString();
-        int initialValue = randomInt();
-        int amount = randomInt();
-        client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
-
-        // вызов системы
-        long result = client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
-
-        // проверка утверждений
-        Assert.assertEquals(initialValue + amount, result);
-    }
-
-    @Test
     public void decExists() throws Exception {
         // настройка системы
         String key = randomString();
@@ -110,6 +43,39 @@ public class UdpClientTest {
 
         // вызов системы
         long result = client.dec(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
+
+        // проверка утверждений
+        Assert.assertEquals(initialValue, result);
+    }
+
+    @Test
+    public void deleteQ() throws Exception {
+        // настройка системы
+        String key = randomString();
+        client.set(key, DEFAULT_EXP, randomString()).get(1, TimeUnit.SECONDS);
+
+        // вызов системы
+        client.deleteQ(key);
+
+        // проверка утверждений
+        try {
+            client.get(key).get(1, TimeUnit.SECONDS);
+            Assert.fail("Key isn't exists");
+        } catch (Exception e) {
+            int status = ((OperationError) e.getCause()).getStatus();
+            Assert.assertEquals("Key not exists", 1, status);
+        }
+    }
+
+    @Test
+    public void inc() throws Exception {
+        // настройка системы
+        String key = randomString();
+        int initialValue = randomInt();
+        int amount = randomInt();
+
+        // вызов системы
+        long result = client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
 
         // проверка утверждений
         Assert.assertEquals(initialValue, result);
@@ -132,30 +98,87 @@ public class UdpClientTest {
     }
 
     @Test
-    public void deleteQ() throws Exception {
+    public void incExists() throws Exception {
         // настройка системы
         String key = randomString();
-        client.set(key, DEFAULT_EXP, randomString()).get(1, TimeUnit.SECONDS);
+        int initialValue = randomInt();
+        int amount = randomInt();
+        client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
 
         // вызов системы
-        client.deleteQ(key);
+        long result = client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
 
         // проверка утверждений
-        try {
-            client.get(key).get(1, TimeUnit.SECONDS);
-            Assert.fail("Key isn't exists");
-        } catch (Exception e) {
-            int status = ((OperationError) e.getCause()).getStatus();
-            Assert.assertEquals("Key not exists", 1, status);
-        }
+        Assert.assertEquals(initialValue + amount, result);
     }
 
+    @Test
+    public void incFromWrongPort() throws Exception {
+        ClientBuilder builder = new ClientBuilder()
+                .setTimeout(50);
+        builder.addDC().main(true).newMirror().add(new InetSocketAddress("localhost", 11111));
+        client = builder.build();
 
-    private String randomString() {
-        return UUID.randomUUID().toString();
+        // настройка системы
+        String key = randomString();
+        int initialValue = randomInt();
+        int amount = randomInt();
+
+        // вызов системы
+        Throwable oe = null;
+        try {
+            client.inc(key, DEFAULT_EXP, amount, initialValue).get(1, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            oe = e.getCause();
+        }
+
+        // проверка утверждений
+        Assert.assertNotNull(oe);
+    }
+
+    @Test
+    public void setAndGet() throws Exception {
+        // настройка системы
+        String key = randomString();
+        String value = randomString();
+
+        client.set(key, DEFAULT_EXP, value).get(2, TimeUnit.SECONDS);
+
+        // вызов системы
+        String result = client.get(key).get(2, TimeUnit.SECONDS);
+
+        // проверка результатов
+        Assert.assertEquals(value, result);
+    }
+
+    @Test
+    public void setQ() throws Exception {
+        // настройка системы
+        String key = randomString();
+        String value = randomString();
+
+        // вызов системы
+        client.setQ(key, DEFAULT_EXP, value);
+
+        // проверка утверждений
+        Thread.sleep(10);
+        String result = client.get(key).get(1, TimeUnit.SECONDS);
+        Assert.assertEquals(value, result);
+    }
+
+    @Before
+    public void setUp() {
+        ClientBuilder builder = new ClientBuilder()
+                .setTimeout(500000);
+        builder.addDC().main(true).newMirror().add(new InetSocketAddress("localhost", 11211));
+        client = builder.build();
     }
 
     private int randomInt() {
         return new Random().nextInt(5000);
+    }
+
+    private String randomString() {
+        return UUID.randomUUID().toString();
     }
 }

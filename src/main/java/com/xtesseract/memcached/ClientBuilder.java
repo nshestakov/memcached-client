@@ -8,41 +8,61 @@ import io.netty.util.ReferenceCountUtil;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Created by tesseract on 29.12.14.
  */
 public class ClientBuilder {
 
+    public static class DC {
+        private boolean main = false;
+        private List<List<InetSocketAddress>> mirrors = new ArrayList<>();
+
+        public boolean isMain() {
+            return main;
+        }
+
+        public DC main(boolean main) {
+            this.main = main;
+            return this;
+        }
+
+        public List<InetSocketAddress> newMirror() {
+            List<InetSocketAddress> mirror = new ArrayList<>();
+            mirrors.add(mirror);
+            return mirror;
+        }
+    }
 
     private static final EventLoopGroup EVENT_LOOP_GROUP = new NioEventLoopGroup();
 
     private int timeout = 50;
-    private int retryTimeout = 25;
 
     private EventLoopGroup eventLoopGroup = EVENT_LOOP_GROUP;
 
-    private List<List<InetSocketAddress>> servers = new ArrayList<>();
+    private List<DC> DCs = new ArrayList<>();
+
+    public DC addDC() {
+        DC dc = new DC();
+        DCs.add(dc);
+        return dc;
+    }
 
     public Client build() {
-        InetSocketAddress[] allServers = allServers();
-        int serversInMirror = allServers.length / servers.size();
+        Optional<DC> readDCo = DCs.stream().findAny().filter(dc -> dc.isMain());
+        DC mainDC = readDCo.orElseGet(() -> DCs.get(0));
 
-        boolean isSimple = 1 == serversInMirror;
-        return new UdpClient(retryTimeout,
-                timeout,
+        DC[] otherDCs = DCs.stream().filter(dc -> !dc.isMain()).toArray(DC[]::new);
+
+        return new UdpClient(timeout,
                 eventLoopGroup,
-                isSimple ? simpleReadStrategy(allServers) : shardReadStrategy(allServers),
-                isSimple ? simpleWriteStrategy(allServers) : shardWriteStrategy(allServers));
+                shardReadStrategy(mainDC),
+                shardWriteStrategy(otherDCs));
     }
 
     public ClientBuilder eventLoopGroup(EventLoopGroup eventLoopGroup) {
         this.eventLoopGroup = eventLoopGroup;
-        return this;
-    }
-
-    public ClientBuilder retryTimeout(int retryTimeout) {
-        this.retryTimeout = retryTimeout;
         return this;
     }
 
@@ -51,53 +71,40 @@ public class ClientBuilder {
         return this;
     }
 
-    public ClientBuilder addMirror(List<InetSocketAddress> mirrorServers) {
-        servers.add(mirrorServers);
-        return this;
+    private int hash(String key) {
+        return key.hashCode();
     }
 
-    private InetSocketAddress[] allServers() {
-        return servers.stream().flatMap(v -> v.stream()).toArray(InetSocketAddress[]::new);
-    }
-
-    private ServerStrategy simpleReadStrategy(InetSocketAddress[] servers) {
-        InetSocketAddress server = servers[0];
+    private ServerStrategy shardReadStrategy(DC dc) {
+        List<List<InetSocketAddress>> mirrors = dc.mirrors;
+        int numberOfMirrors = mirrors.size();
+        int retainAmount = numberOfMirrors - 1;
         return (chanel, key, buf) -> {
-            chanel.writeAndFlush(new DatagramPacket(buf, server));
-        };
-    }
-
-    private ServerStrategy simpleWriteStrategy(InetSocketAddress[] servers) {
-        int numberOfMirrors = this.servers.size();
-        return (chanel, key, buf) -> {
-            if (numberOfMirrors > 1) {
-                ReferenceCountUtil.retain(buf, numberOfMirrors - 1);
+            int hash = hash(key);
+            if (retainAmount > 0) {
+                ReferenceCountUtil.retain(buf, retainAmount);
             }
-            for (int i = 0; i < servers.length; ++i) {
-                chanel.writeAndFlush(new DatagramPacket(buf, servers[i]));
-            }
+            mirrors.forEach(shards -> chanel.writeAndFlush(new DatagramPacket(buf, shards.get(hash % shards.size()))));
         };
     }
 
-    private ServerStrategy shardReadStrategy(InetSocketAddress[] servers) {
-        int numberOfMirrors = this.servers.size();
-        int serversInMirror = servers.length / numberOfMirrors;
+    private ServerStrategy shardWriteStrategy(DC[] otherDCs) {
+        if (0 == otherDCs.length) {
+            return (chanel, key, buf) -> ReferenceCountUtil.release(buf);
+        }
+
         return (chanel, key, buf) -> {
-            chanel.writeAndFlush(new DatagramPacket(buf, servers[hash(key, serversInMirror)]));
-        };
-    }
-
-    private ServerStrategy shardWriteStrategy(InetSocketAddress[] servers) {
-        int numberOfMirrors = this.servers.size();
-        int serversInMirror = servers.length / numberOfMirrors;
-        return (chanel, key, buf) -> {
-            for (int i = hash(key, serversInMirror); i < servers.length; i += serversInMirror) {
-                chanel.writeAndFlush(new DatagramPacket(buf, servers[i]));
+            ReferenceCountUtil.retain(buf);
+            int hash = hash(key);
+            for (int i = 0; i < otherDCs.length; ++i) {
+                DC dc = otherDCs[i];
+                int numberOfMirrors = dc.mirrors.size();
+                if (numberOfMirrors > 0) {
+                    ReferenceCountUtil.retain(buf, numberOfMirrors);
+                }
+                dc.mirrors.forEach(shards -> chanel.writeAndFlush(new DatagramPacket(buf, shards.get(hash % shards.size()))));
             }
+            ReferenceCountUtil.release(buf, otherDCs.length);
         };
-    }
-
-    private int hash(String key, int serversInMirror) {
-        return key.hashCode() % serversInMirror;
     }
 }

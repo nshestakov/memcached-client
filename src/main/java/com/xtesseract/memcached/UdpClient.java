@@ -21,7 +21,8 @@ import static com.xtesseract.memcached.ProtocolHelper.*;
 
 
 /**
- * Created by tesseract on 15.12.14.
+ * Реализация  {@link com.xtesseract.memcached.Client memcahed клиента} бинароного протокола использующего
+ * в качестве транспорта UDP
  */
 public class UdpClient implements Client {
 
@@ -42,12 +43,6 @@ public class UdpClient implements Client {
             int totalNumberOfDatagrams = buf.readShort();
             int reserved = buf.readShort();
 
-            Promise promise = callbacks.remove(requestId);
-            if (null == promise) {
-                // Ответ уже получен или истек таймаут
-                return;
-            }
-
             // Operation header
             short magic = buf.readUnsignedByte(); // Magic number.
             if (RESPONSE_PACKET_MAGIC != magic) {
@@ -59,13 +54,19 @@ public class UdpClient implements Client {
             byte extrasLength = buf.readByte();  // Length in bytes of the command extras
             byte dataType = buf.readByte();      // Reserved for future use (Sean is using this soon).
             int status = buf.readShort();        // Status of the response (non-zero on error).
+            int totalBodyLength = buf.readInt(); // Length in bytes of extra + key + value
+            int opaque = buf.readInt();          // Will be copied back to you in the response.
+            long cas = buf.readLong();           // Data version check
+
+            Promise promise = callbacks.remove(opaque);
+            if (null == promise) {
+                // Ответ уже получен или истек таймаут
+                return;
+            }
             if (0 != status) {
                 promise.tryFailure(new OperationError(status));
                 return;
             }
-            int totalBodyLength = buf.readInt(); // Length in bytes of extra + key + value
-            int opaque = buf.readInt();          // Will be copied back to you in the response.
-            long cas = buf.readLong();           // Data version check
 
             int bodyLength = totalBodyLength - extrasLength - keyLength;
 
@@ -91,7 +92,7 @@ public class UdpClient implements Client {
                     return;
 
                 default:
-                    throw new IllegalArgumentException("Unsupported operation: " + opCode);
+                    promise.tryFailure(new IllegalArgumentException("Unsupported operation: " + opCode));
             }
         }
     }
@@ -99,7 +100,6 @@ public class UdpClient implements Client {
     private final ServerStrategy readStrategy;
     private final ServerStrategy writeStrategy;
 
-    private final int retryTimeout; // ms
     private final int timeout; // ms.
 
     private final Channel channel;
@@ -107,8 +107,7 @@ public class UdpClient implements Client {
 
     private final AtomicInteger requestIdCounter = new AtomicInteger((int) (System.currentTimeMillis() * 100));
 
-    UdpClient(int retryTimeout,
-              int timeout,
+    UdpClient(int timeout,
               EventLoopGroup group,
               ServerStrategy readStrategy,
               ServerStrategy writeStrategy) {
@@ -117,7 +116,6 @@ public class UdpClient implements Client {
         this.readStrategy = readStrategy;
         this.writeStrategy = writeStrategy;
 
-        this.retryTimeout = retryTimeout;
         this.timeout = timeout;
 
         Bootstrap b = new Bootstrap();
@@ -130,6 +128,10 @@ public class UdpClient implements Client {
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public int pendingRequests() {
+        return callbacks.size();
     }
 
     @Override
@@ -145,23 +147,23 @@ public class UdpClient implements Client {
     @Override
     public Promise<Long> dec(String key, int exp, long incValue, long initialValue) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.DECREMENT, key, exp, incValue, initialValue));
+        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.DECREMENT, Operation.DECREMENT_Q, key, exp, incValue, initialValue));
     }
 
     @Override
     public void decQ(String key, int exp, long incValue, long initialValue) {
-        sendIncOrDecOperation(nextRequestId(), Operation.DECREMENT_Q, key, exp, incValue, initialValue);
+        sendIncOrDecOperation(nextRequestId(), Operation.DECREMENT_Q, Operation.DECREMENT_Q, key, exp, incValue, initialValue);
     }
 
     @Override
     public Promise<Void> delete(String key) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendWriteSimpleKeyPacketOperation(requestId, Operation.DELETE, key));
+        return sendAndWaitResult(requestId, () -> sendWriteSimpleKeyPacketOperation(requestId, Operation.DELETE, Operation.DELETE_Q, key));
     }
 
     @Override
     public void deleteQ(String key) {
-        sendWriteSimpleKeyPacketOperation(nextRequestId(), Operation.DELETE_Q, key);
+        sendWriteSimpleKeyPacketOperation(nextRequestId(), Operation.DELETE_Q, Operation.DELETE_Q, key);
     }
 
     @Override
@@ -178,12 +180,12 @@ public class UdpClient implements Client {
     @Override
     public Promise<Long> inc(String key, int exp, long incValue, long initialValue) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.INCREMENT, key, exp, incValue, initialValue));
+        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.INCREMENT, Operation.INCREMENT_Q, key, exp, incValue, initialValue));
     }
 
     @Override
     public void incQ(String key, int exp, long incValue, long initialValue) {
-        sendIncOrDecOperation(nextRequestId(), Operation.INCREMENT_Q, key, exp, incValue, initialValue);
+        sendIncOrDecOperation(nextRequestId(), Operation.INCREMENT_Q, Operation.INCREMENT_Q, key, exp, incValue, initialValue);
     }
 
     @Override
@@ -194,7 +196,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<Void> set(String key, int exp, String value) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendSetOperation(requestId, Operation.SET, key, exp, value));
+        return sendAndWaitResult(requestId, () -> sendSetOperation(requestId, Operation.SET, Operation.SET_Q, key, exp, value));
     }
 
     @Override
@@ -203,56 +205,45 @@ public class UdpClient implements Client {
     }
 
     private void executeSetQ(byte opCode, String key, int exp, String value) {
-        sendSetOperation(nextRequestId(), opCode, key, exp, value);
+        sendSetOperation(nextRequestId(), opCode, opCode, key, exp, value);
     }
 
     private int nextRequestId() {
-        return requestIdCounter.incrementAndGet() & 0xffff;
+        return requestIdCounter.incrementAndGet();
     }
 
     private <V> Promise<V> sendAndWaitResult(Integer requestId, Runnable method) {
         Promise<V> promise = channel.eventLoop().newPromise();
         callbacks.put(requestId, promise);
 
-        // ??????? потенциальная утечка в callbacks
-        ScheduledFuture<?> schedule = channel.eventLoop().schedule(() -> {
-            Promise<?> p = callbacks.get(requestId);
-            if (null != p && !p.isDone()) {
-                // resend packet
-                method.run();
+        ScheduledFuture<?> scheduleTimeout = channel.eventLoop().schedule(() -> {
+            callbacks.remove(requestId);
+            promise.tryFailure(new TimeoutException());
+        }, timeout, TimeUnit.MILLISECONDS);
 
-                ScheduledFuture<?> schedule1 = channel.eventLoop().schedule(() -> {
-                    Promise<?> pr = callbacks.get(requestId);
-                    if (null != pr && !pr.isDone()) {
-                        pr.tryFailure(new TimeoutException());
-                        callbacks.remove(requestId);
-                    }
-                }, timeout, TimeUnit.MILLISECONDS);
-
-                promise.addListener(f -> schedule1.cancel(false));
-            }
-        }, retryTimeout, TimeUnit.MILLISECONDS);
-
-        promise.addListener(f -> schedule.cancel(false));
+        promise.addListener(f -> scheduleTimeout.cancel(false));
 
         method.run();
 
         return promise;
     }
 
-    private void sendWriteSimpleKeyPacketOperation(int requestId, byte opCode, String key) {
-        writeStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, opCode, key));
+    private void sendIncOrDecOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, long incValue, long initialValue) {
+        readStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
+        writeStrategy.accept(channel, key, getIncPacket(channel, requestId, writeOpCode, key, exp, incValue, initialValue));
     }
 
-    private void sendReadSimpleKeyPacketOperation(int requestId, byte opCode, String key) {
-        readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, opCode, key));
+    private void sendReadSimpleKeyPacketOperation(int requestId, byte readOpCode, String key) {
+        readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
     }
 
-    private void sendSetOperation(int requestId, byte opCode, String key, int exp, String value) {
-        writeStrategy.accept(channel, key, getSetPacket(channel, requestId, opCode, key, exp, value));
+    private void sendSetOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, String value) {
+        readStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
+        writeStrategy.accept(channel, key, getSetPacket(channel, requestId, writeOpCode, key, exp, value));
     }
 
-    private void sendIncOrDecOperation(int requestId, byte opCode, String key, int exp, long incValue, long initialValue) {
-        writeStrategy.accept(channel, key, getIncPacket(channel, requestId, opCode, key, exp, incValue, initialValue));
+    private void sendWriteSimpleKeyPacketOperation(int requestId, byte readOpCode, byte writeOpCode, String key) {
+        readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
+        writeStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, writeOpCode, key));
     }
 }

@@ -1,7 +1,7 @@
 package com.xtesseract.memcached;
 
 /**
- * Created by tesseract on 29.12.14.
+ * Ошибка полученная от memcached
  */
 public class OperationError extends RuntimeException {
 
@@ -27,6 +27,7 @@ public class OperationError extends RuntimeException {
                 return "Unknown status " + status;
         }
     }
+
     private final int status;
 
     public OperationError(int status) {
