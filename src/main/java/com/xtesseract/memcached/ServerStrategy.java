@@ -6,7 +6,7 @@ import io.netty.channel.Channel;
 import java.util.function.BiConsumer;
 
 /**
-* Created by tesseract on 29.12.14.
+* Стратегия отправки запроса к memcached
 */
 interface ServerStrategy  {
     void accept(Channel channel, String key, ByteBuf buf);

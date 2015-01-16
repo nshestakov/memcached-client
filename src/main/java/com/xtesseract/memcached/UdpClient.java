@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import static com.xtesseract.memcached.ProtocolHelper.*;
 
@@ -174,7 +175,7 @@ public class UdpClient implements Client {
 
     @Override
     public Promise<Long> inc(String key, int exp) {
-        return inc(key, exp, 1, 0);
+        return inc(key, exp, 1, 1);
     }
 
     @Override

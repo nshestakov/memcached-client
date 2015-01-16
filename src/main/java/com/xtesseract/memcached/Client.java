@@ -3,7 +3,9 @@ package com.xtesseract.memcached;
 import io.netty.util.concurrent.Promise;
 
 /**
- * Простой асинхронный memcached клиент
+ * Простой асинхронный memcached клиент.
+ *
+ * @see com.xtesseract.memcached.ClientBuilder
  */
 public interface Client {
 

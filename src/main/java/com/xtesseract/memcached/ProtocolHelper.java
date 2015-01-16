@@ -5,7 +5,9 @@ import io.netty.channel.Channel;
 import io.netty.util.CharsetUtil;
 
 /**
- * Created by tesseract on 15.12.14.
+ * Вспомогательный класс для формирования запросов к memcached
+ *
+ * @see <a href="https://github.com/memcached/memcached/blob/master/doc/protocol-binary.xml">memcached binary protocol documentation</a>
  */
 public class ProtocolHelper {
 
@@ -84,7 +86,6 @@ public class ProtocolHelper {
         writePacketHeader(buf, requestId, opCode, totalDataLength, keyBytes.length, 0);
 
         // Extras
-
         // Body
         buf.writeBytes(keyBytes);
 
