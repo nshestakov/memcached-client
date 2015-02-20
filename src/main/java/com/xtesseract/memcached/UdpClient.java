@@ -16,7 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 import static com.xtesseract.memcached.ProtocolHelper.*;
 
@@ -100,6 +99,7 @@ public class UdpClient implements Client {
 
     private final ServerStrategy readStrategy;
     private final ServerStrategy writeStrategy;
+    private final ServerStrategy commonStrategy;
 
     private final int timeout; // ms.
 
@@ -111,11 +111,13 @@ public class UdpClient implements Client {
     UdpClient(int timeout,
               EventLoopGroup group,
               ServerStrategy readStrategy,
-              ServerStrategy writeStrategy) {
+              ServerStrategy writeStrategy,
+              ServerStrategy commonStrategy) {
         this.callbacks = new ConcurrentHashMap<>();
 
         this.readStrategy = readStrategy;
         this.writeStrategy = writeStrategy;
+        this.commonStrategy = commonStrategy;
 
         this.timeout = timeout;
 
@@ -230,8 +232,12 @@ public class UdpClient implements Client {
     }
 
     private void sendIncOrDecOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, long incValue, long initialValue) {
-        readStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
-        writeStrategy.accept(channel, key, getIncPacket(channel, requestId, writeOpCode, key, exp, incValue, initialValue));
+        if (readOpCode == writeOpCode) {
+            commonStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
+        } else {
+            readStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
+            writeStrategy.accept(channel, key, getIncPacket(channel, requestId, writeOpCode, key, exp, incValue, initialValue));
+        }
     }
 
     private void sendReadSimpleKeyPacketOperation(int requestId, byte readOpCode, String key) {
@@ -239,12 +245,20 @@ public class UdpClient implements Client {
     }
 
     private void sendSetOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, String value) {
-        readStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
-        writeStrategy.accept(channel, key, getSetPacket(channel, requestId, writeOpCode, key, exp, value));
+        if (readOpCode == writeOpCode) {
+            commonStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
+        } else {
+            readStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
+            writeStrategy.accept(channel, key, getSetPacket(channel, requestId, writeOpCode, key, exp, value));
+        }
     }
 
     private void sendWriteSimpleKeyPacketOperation(int requestId, byte readOpCode, byte writeOpCode, String key) {
-        readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
-        writeStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, writeOpCode, key));
+        if (readOpCode == writeOpCode) {
+            commonStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
+        } else {
+            readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
+            writeStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, writeOpCode, key));
+        }
     }
 }

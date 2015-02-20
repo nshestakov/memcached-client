@@ -49,7 +49,8 @@ public class ClientBuilder {
         return new UdpClient(timeout,
                 eventLoopGroup,
                 shardStrategy(readWriteMirrors),
-                shardStrategy(writeOnlyMirrors));
+                shardStrategy(writeOnlyMirrors),
+                shardStrategy(concat(readWriteMirrors, writeOnlyMirrors)));
     }
 
     public ClientBuilder eventLoopGroup(EventLoopGroup eventLoopGroup) {
@@ -74,6 +75,13 @@ public class ClientBuilder {
             List<InetSocketAddress> mirror = mirrors.get(i);
             result[i] = mirror.toArray(new InetSocketAddress[mirror.size()]);
         }
+        return result;
+    }
+
+    private List<List<InetSocketAddress>> concat(List<List<InetSocketAddress>> first, List<List<InetSocketAddress>> second) {
+        List<List<InetSocketAddress>> result = new ArrayList<>(first.size() + second.size());
+        result.addAll(first);
+        result.addAll(second);
         return result;
     }
 
