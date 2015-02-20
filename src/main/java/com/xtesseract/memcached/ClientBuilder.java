@@ -92,8 +92,11 @@ public class ClientBuilder {
     private ServerStrategy shardStrategy(List<List<InetSocketAddress>> listOfMirrors) {
         InetSocketAddress[][] servers = asArrays(listOfMirrors);
         int numberOfMirrors = servers.length;
-        int retainAmount = numberOfMirrors - 1;
+        if (0 == numberOfMirrors) {
+            return null;
+        }
 
+        int retainAmount = numberOfMirrors - 1;
         return (chanel, key, buf) -> {
             int hash = hash(key);
             if (retainAmount > 0) {

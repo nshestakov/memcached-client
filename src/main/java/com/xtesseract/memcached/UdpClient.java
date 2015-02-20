@@ -26,6 +26,10 @@ import static com.xtesseract.memcached.ProtocolHelper.*;
  */
 public class UdpClient implements Client {
 
+    private interface PacketFactory {
+        ByteBuf apply(byte opCode);
+    }
+
     private static class PacketInboundHandler extends SimpleChannelInboundHandler<DatagramPacket> {
         private final ConcurrentHashMap<Integer, Promise<?>> callbacks;
 
@@ -232,33 +236,33 @@ public class UdpClient implements Client {
     }
 
     private void sendIncOrDecOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, long incValue, long initialValue) {
-        if (readOpCode == writeOpCode) {
-            commonStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
-        } else {
-            readStrategy.accept(channel, key, getIncPacket(channel, requestId, readOpCode, key, exp, incValue, initialValue));
-            writeStrategy.accept(channel, key, getIncPacket(channel, requestId, writeOpCode, key, exp, incValue, initialValue));
-        }
+        send(readOpCode, writeOpCode, key, (opCode) -> getIncPacket(channel, requestId, opCode, key, exp, incValue, initialValue));
     }
 
     private void sendReadSimpleKeyPacketOperation(int requestId, byte readOpCode, String key) {
-        readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
+        send(readOpCode, key, readStrategy, (opCode) -> getSimpleKeyPacket(channel, requestId, opCode, key));
     }
 
     private void sendSetOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, String value) {
+        send(readOpCode, writeOpCode, key, (opCode) -> getSetPacket(channel, requestId, opCode, key, exp, value));
+    }
+
+    private void send(byte readOpCode, byte writeOpCode, String key, PacketFactory packetCreator) {
         if (readOpCode == writeOpCode) {
-            commonStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
+            send(readOpCode, key, commonStrategy, packetCreator);
         } else {
-            readStrategy.accept(channel, key, getSetPacket(channel, requestId, readOpCode, key, exp, value));
-            writeStrategy.accept(channel, key, getSetPacket(channel, requestId, writeOpCode, key, exp, value));
+            send(readOpCode, key, readStrategy, packetCreator);
+            send(writeOpCode, key, writeStrategy, packetCreator);
+        }
+    }
+
+    private void send(byte opCode, String key, ServerStrategy strategy, PacketFactory packetCreator) {
+        if (null != strategy) {
+            strategy.accept(channel, key, packetCreator.apply(opCode));
         }
     }
 
     private void sendWriteSimpleKeyPacketOperation(int requestId, byte readOpCode, byte writeOpCode, String key) {
-        if (readOpCode == writeOpCode) {
-            commonStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
-        } else {
-            readStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, readOpCode, key));
-            writeStrategy.accept(channel, key, getSimpleKeyPacket(channel, requestId, writeOpCode, key));
-        }
+        send(readOpCode, writeOpCode, key, (opCode) -> getSimpleKeyPacket(channel, requestId, opCode, key));
     }
 }
