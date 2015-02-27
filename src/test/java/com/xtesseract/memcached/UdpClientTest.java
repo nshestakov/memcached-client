@@ -10,7 +10,6 @@ import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by Nikolay Shestakov <ns@xtesseract.com>
@@ -135,6 +134,27 @@ public class UdpClientTest {
 
         // проверка утверждений
         Assert.assertNotNull(oe);
+    }
+
+    @Test
+    public void retryOnFailStrategy() throws Exception {
+        ClientBuilder builder = new ClientBuilder()
+                .setTimeout(2000)
+                .retryOnFail(3, 50);
+        builder.addReadWriteMirror(Arrays.asList(new InetSocketAddress("localhost", 11311)));
+        builder.addReadWriteMirror(Arrays.asList(new InetSocketAddress("localhost", 11211)));
+        client = builder.build();
+
+        // настройка системы
+        String key = randomString();
+        String value = randomString();
+        client.set(key, DEFAULT_EXP, value);
+
+        // вызов системы
+        String result = client.get(key).get(3, TimeUnit.SECONDS);
+
+        // проверка утверждений
+        Assert.assertEquals(value, result);
     }
 
     @Test

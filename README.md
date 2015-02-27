@@ -1,5 +1,12 @@
 # memcached-client
+
 Simple UDP memcached client
+
+Futures
+* Mirroring and sharding data
+
+
+
 
 Тривиальная реализация memcached клиента работающего по UDP протоколу. Имеет смысл его использовать
 если одновременно работа происходит с несколькими memcached находящихся в разлицных датацентрах и 

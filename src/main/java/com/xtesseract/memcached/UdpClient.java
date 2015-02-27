@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static com.xtesseract.memcached.ProtocolHelper.*;
 
@@ -102,7 +103,8 @@ public class UdpClient implements Client {
     }
 
     private final ServerStrategy readStrategy;
-    private final ServerStrategy writeStrategy;
+    private final ServerStrategy readOnWriteStrategy;
+    private final ServerStrategy writeOnlyStrategy;
     private final ServerStrategy commonStrategy;
 
     private final int timeout; // ms.
@@ -115,12 +117,14 @@ public class UdpClient implements Client {
     UdpClient(int timeout,
               EventLoopGroup group,
               ServerStrategy readStrategy,
-              ServerStrategy writeStrategy,
+              ServerStrategy readOnWriteStrategy,
+              ServerStrategy writeOnlyStrategy,
               ServerStrategy commonStrategy) {
         this.callbacks = new ConcurrentHashMap<>();
 
         this.readStrategy = readStrategy;
-        this.writeStrategy = writeStrategy;
+        this.readOnWriteStrategy = readOnWriteStrategy;
+        this.writeOnlyStrategy = writeOnlyStrategy;
         this.commonStrategy = commonStrategy;
 
         this.timeout = timeout;
@@ -154,7 +158,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<Long> dec(String key, int exp, long incValue, long initialValue) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.DECREMENT, Operation.DECREMENT_Q, key, exp, incValue, initialValue));
+        return sendAndWaitResult(requestId, (promise) -> sendIncOrDecOperation(requestId, Operation.DECREMENT, Operation.DECREMENT_Q, key, exp, incValue, initialValue));
     }
 
     @Override
@@ -165,7 +169,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<Void> delete(String key) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendWriteSimpleKeyPacketOperation(requestId, Operation.DELETE, Operation.DELETE_Q, key));
+        return sendAndWaitResult(requestId, (promise) -> sendWriteSimpleKeyPacketOperation(requestId, Operation.DELETE, Operation.DELETE_Q, key));
     }
 
     @Override
@@ -176,7 +180,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<String> get(String key) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendReadSimpleKeyPacketOperation(requestId, Operation.GET, key));
+        return sendAndWaitResult(requestId, (promise) -> sendReadSimpleKeyPacketOperation(promise, requestId, Operation.GET, key));
     }
 
     @Override
@@ -187,7 +191,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<Long> inc(String key, int exp, long incValue, long initialValue) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendIncOrDecOperation(requestId, Operation.INCREMENT, Operation.INCREMENT_Q, key, exp, incValue, initialValue));
+        return sendAndWaitResult(requestId, (promise) -> sendIncOrDecOperation(requestId, Operation.INCREMENT, Operation.INCREMENT_Q, key, exp, incValue, initialValue));
     }
 
     @Override
@@ -203,7 +207,7 @@ public class UdpClient implements Client {
     @Override
     public Promise<Void> set(String key, int exp, String value) {
         int requestId = nextRequestId();
-        return sendAndWaitResult(requestId, () -> sendSetOperation(requestId, Operation.SET, Operation.SET_Q, key, exp, value));
+        return sendAndWaitResult(requestId, (promise) -> sendSetOperation(requestId, Operation.SET, Operation.SET_Q, key, exp, value));
     }
 
     @Override
@@ -219,7 +223,7 @@ public class UdpClient implements Client {
         return requestIdCounter.incrementAndGet();
     }
 
-    private <V> Promise<V> sendAndWaitResult(Integer requestId, Runnable method) {
+    private <V> Promise<V> sendAndWaitResult(Integer requestId, Consumer<Promise<?>> method) {
         Promise<V> promise = channel.eventLoop().newPromise();
         callbacks.put(requestId, promise);
 
@@ -230,7 +234,7 @@ public class UdpClient implements Client {
 
         promise.addListener(f -> scheduleTimeout.cancel(false));
 
-        method.run();
+        method.accept(promise);
 
         return promise;
     }
@@ -239,8 +243,8 @@ public class UdpClient implements Client {
         send(readOpCode, writeOpCode, key, (opCode) -> getIncPacket(channel, requestId, opCode, key, exp, incValue, initialValue));
     }
 
-    private void sendReadSimpleKeyPacketOperation(int requestId, byte readOpCode, String key) {
-        send(readOpCode, key, readStrategy, (opCode) -> getSimpleKeyPacket(channel, requestId, opCode, key));
+    private void sendReadSimpleKeyPacketOperation(Promise<?> promise, int requestId, byte readOpCode, String key) {
+        send(promise, readOpCode, key, readStrategy, (opCode) -> getSimpleKeyPacket(channel, requestId, opCode, key));
     }
 
     private void sendSetOperation(int requestId, byte readOpCode, byte writeOpCode, String key, int exp, String value) {
@@ -249,16 +253,16 @@ public class UdpClient implements Client {
 
     private void send(byte readOpCode, byte writeOpCode, String key, PacketFactory packetCreator) {
         if (readOpCode == writeOpCode) {
-            send(readOpCode, key, commonStrategy, packetCreator);
+            send(null, readOpCode, key, commonStrategy, packetCreator);
         } else {
-            send(readOpCode, key, readStrategy, packetCreator);
-            send(writeOpCode, key, writeStrategy, packetCreator);
+            send(null, readOpCode, key, readOnWriteStrategy, packetCreator);
+            send(null, writeOpCode, key, writeOnlyStrategy, packetCreator);
         }
     }
 
-    private void send(byte opCode, String key, ServerStrategy strategy, PacketFactory packetCreator) {
+    private void send(Promise<?> promise, byte opCode, String key, ServerStrategy strategy, PacketFactory packetCreator) {
         if (null != strategy) {
-            strategy.accept(channel, key, packetCreator.apply(opCode));
+            strategy.accept(promise, channel, key, packetCreator.apply(opCode));
         }
     }
 
